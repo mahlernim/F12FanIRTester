@@ -20,14 +20,32 @@ public class MainActivity extends Activity {
     private int device = 3;
     private int subdevice = 1;
     private int carrier = 37900;
+    private int powerIndex = 0;
+    private int necCommand = 0x45;
+    private List<PowerCodeCatalog.Candidate> powerCandidates;
+
+    private static final String MODE_F12_1 = "F12-1 (4 frames: 34T / 88T / 34T)";
+    private static final String MODE_F12_0 = "F12-0 (2 frames: 34T)";
+    private static final String MODE_LEGACY = "Legacy F12 (2 frames: 80T / 80T)";
+    private static final String[] MODES = {MODE_F12_1, MODE_F12_0, MODE_LEGACY};
+    private static final int[] AIRMATE_FUNCTIONS = {9, 17, 33, 65, 99, 129, 195};
 
     private TextView statusView;
     private TextView codeView;
     private TextView marksView;
     private EditText noteEdit;
     private CheckBox autoAdvance;
+    private CheckBox autoSendNext;
     private Spinner deviceSpinner;
     private Spinner subdeviceSpinner;
+    private Spinner modeSpinner;
+    private TextView powerCandidateView;
+    private CheckBox autoSendPowerNext;
+    private TextView necCodeView;
+    private TextView necMarksView;
+    private EditText necNoteEdit;
+    private CheckBox necAutoAdvance;
+    private CheckBox necAutoSendNext;
 
     private final String[] labels = {
             "NO RESPONSE", "POWER", "SPEED +", "SPEED -",
@@ -41,6 +59,10 @@ public class MainActivity extends Activity {
         ir = (ConsumerIrManager) getSystemService(CONSUMER_IR_SERVICE);
         prefs = getSharedPreferences("results", MODE_PRIVATE);
         function = prefs.getInt("current_function", 0);
+        powerCandidates = PowerCodeCatalog.load();
+        powerIndex = Math.min(prefs.getInt("current_power_candidate", 0),
+                powerCandidates.size() - 1);
+        necCommand = prefs.getInt("current_nec_command", 0x45);
 
         setContentView(buildUi());
         updateIrStatus();
@@ -55,11 +77,11 @@ public class MainActivity extends Activity {
         root.setPadding(dp(16), dp(12), dp(16), dp(24));
         scroll.addView(root);
 
-        TextView title = text("F12 Fan IR Tester", 24, true);
+        TextView title = text("Fan IR Tester", 24, true);
         root.addView(title);
 
         TextView intro = text(
-                "Defaults: F12, 37.9 kHz, Device 3, Subdevice 1.\n" +
+                "Default: corrected F12-1, 37.9 kHz, Device 3, H/S 1.\n" +
                 "Aim the phone IR blaster at the fan, press SEND, then mark what happened.",
                 14, false);
         intro.setPadding(0, dp(4), 0, dp(8));
@@ -67,6 +89,19 @@ public class MainActivity extends Activity {
 
         statusView = text("", 13, false);
         root.addView(statusView);
+
+        TextView modeLabel = text("WAVEFORM MODE", 14, true);
+        modeLabel.setPadding(0, dp(10), 0, 0);
+        root.addView(modeLabel);
+
+        modeSpinner = new Spinner(this);
+        ArrayAdapter<String> modeAdapter = new ArrayAdapter<>(this,
+                android.R.layout.simple_spinner_item, MODES);
+        modeAdapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
+        modeSpinner.setAdapter(modeAdapter);
+        modeSpinner.setSelection(prefs.getInt("current_mode", 0));
+        root.addView(modeSpinner, new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, dp(52)));
 
         LinearLayout settings = horizontal();
         settings.setGravity(Gravity.CENTER_VERTICAL);
@@ -80,10 +115,10 @@ public class MainActivity extends Activity {
                 new String[]{"0","1","2","3","4","5","6","7"});
         dAdapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
         deviceSpinner.setAdapter(dAdapter);
-        deviceSpinner.setSelection(3);
+        deviceSpinner.setSelection(prefs.getInt("current_device", 3));
         settings.addView(deviceSpinner, new LinearLayout.LayoutParams(0, dp(52), 1));
 
-        TextView sLabel = text("S", 14, true);
+        TextView sLabel = text("H/S", 14, true);
         sLabel.setPadding(dp(12), 0, 0, 0);
         settings.addView(sLabel);
 
@@ -93,10 +128,207 @@ public class MainActivity extends Activity {
                 new String[]{"0","1"});
         sAdapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
         subdeviceSpinner.setAdapter(sAdapter);
-        subdeviceSpinner.setSelection(1);
+        subdeviceSpinner.setSelection(prefs.getInt("current_subdevice", 1));
         settings.addView(subdeviceSpinner, new LinearLayout.LayoutParams(0, dp(52), 1));
 
         root.addView(settings);
+
+        AdapterView.OnItemSelectedListener settingsListener = new AdapterView.OnItemSelectedListener() {
+            @Override
+            public void onItemSelected(AdapterView<?> parent, View view, int position, long id) {
+                prefs.edit()
+                        .putInt("current_mode", modeSpinner.getSelectedItemPosition())
+                        .putInt("current_device", deviceSpinner.getSelectedItemPosition())
+                        .putInt("current_subdevice", subdeviceSpinner.getSelectedItemPosition())
+                        .apply();
+                updateCode();
+                updateMarks();
+            }
+
+            @Override
+            public void onNothingSelected(AdapterView<?> parent) { }
+        };
+        modeSpinner.setOnItemSelectedListener(settingsListener);
+        deviceSpinner.setOnItemSelectedListener(settingsListener);
+        subdeviceSpinner.setOnItemSelectedListener(settingsListener);
+
+        TextView quickTitle = text("QUICK TEST AIRMATE VALUES (tap to send)", 15, true);
+        quickTitle.setPadding(0, dp(12), 0, dp(4));
+        root.addView(quickTitle);
+
+        LinearLayout quickA = horizontal();
+        LinearLayout quickB = horizontal();
+        for (int i = 0; i < AIRMATE_FUNCTIONS.length; i++) {
+            int quickFunction = AIRMATE_FUNCTIONS[i];
+            Button quick = button(quickFunction + "\n0x" +
+                    String.format(Locale.US, "%02X", quickFunction));
+            quick.setTextSize(11);
+            quick.setOnClickListener(v -> {
+                function = quickFunction;
+                persistCurrent();
+                updateCode();
+                sendCurrent();
+            });
+            if (i < 4) quickA.addView(quick, weight());
+            else quickB.addView(quick, weight());
+        }
+        root.addView(quickA);
+        root.addView(quickB);
+
+        TextView powerScanTitle = text("AIRMATE POWER-CODE SCAN", 17, true);
+        powerScanTitle.setPadding(0, dp(18), 0, dp(4));
+        root.addView(powerScanTitle);
+
+        TextView powerHelp = text(
+                "21 known power candidates: 20 unique Airmate signals plus one generic fan fallback. " +
+                "Press SEND POWER once, then mark the result.", 13, false);
+        root.addView(powerHelp);
+
+        powerCandidateView = text("", 16, true);
+        powerCandidateView.setGravity(Gravity.CENTER);
+        powerCandidateView.setPadding(0, dp(10), 0, dp(8));
+        root.addView(powerCandidateView);
+
+        LinearLayout powerNav = horizontal();
+        Button previousPower = button("PREV");
+        Button sendPower = button("SEND POWER");
+        Button nextPower = button("NEXT");
+        powerNav.addView(previousPower, weight());
+        powerNav.addView(sendPower, weight());
+        powerNav.addView(nextPower, weight());
+        root.addView(powerNav);
+
+        previousPower.setOnClickListener(v -> changePowerCandidate(-1));
+        sendPower.setOnClickListener(v -> sendPowerCandidate());
+        nextPower.setOnClickListener(v -> changePowerCandidate(1));
+
+        LinearLayout powerMark = horizontal();
+        Button noPowerEffect = button("NO EFFECT");
+        Button powerWorked = button("POWER CHANGED");
+        powerMark.addView(noPowerEffect, weight());
+        powerMark.addView(powerWorked, weight());
+        root.addView(powerMark);
+
+        noPowerEffect.setOnClickListener(v -> markPowerCandidate(false));
+        powerWorked.setOnClickListener(v -> markPowerCandidate(true));
+
+        autoSendPowerNext = new CheckBox(this);
+        autoSendPowerNext.setText("After NO EFFECT, advance and send the next power candidate");
+        autoSendPowerNext.setChecked(true);
+        root.addView(autoSendPowerNext);
+
+        updatePowerCandidate();
+
+        TextView necTitle = text("NEC COMMAND SCAN — ADDRESS 0x00", 17, true);
+        necTitle.setPadding(0, dp(20), 0, dp(4));
+        root.addView(necTitle);
+
+        TextView necHelp = text(
+                "Use this after NEC 00/45 responds. Scan commands 0–255 to identify controls.",
+                13, false);
+        root.addView(necHelp);
+
+        necCodeView = text("", 24, true);
+        necCodeView.setGravity(Gravity.CENTER);
+        necCodeView.setPadding(0, dp(10), 0, dp(10));
+        root.addView(necCodeView);
+
+        LinearLayout necNav = horizontal();
+        Button necMinus16 = button("-16");
+        Button necPrevious = button("PREV");
+        Button necSend = button("SEND NEC");
+        Button necNext = button("NEXT");
+        Button necPlus16 = button("+16");
+        necNav.addView(necMinus16, weight());
+        necNav.addView(necPrevious, weight());
+        necNav.addView(necSend, weight());
+        necNav.addView(necNext, weight());
+        necNav.addView(necPlus16, weight());
+        root.addView(necNav);
+
+        necMinus16.setOnClickListener(v -> changeNecCommand(-16));
+        necPrevious.setOnClickListener(v -> changeNecCommand(-1));
+        necSend.setOnClickListener(v -> sendNecCurrent());
+        necNext.setOnClickListener(v -> changeNecCommand(1));
+        necPlus16.setOnClickListener(v -> changeNecCommand(16));
+
+        LinearLayout necJump = horizontal();
+        EditText necJumpEdit = new EditText(this);
+        necJumpEdit.setSingleLine(true);
+        necJumpEdit.setHint("command, e.g. 69 or 0x45");
+        Button necJumpButton = button("GO");
+        necJump.addView(necJumpEdit, new LinearLayout.LayoutParams(0, dp(52), 1));
+        necJump.addView(necJumpButton, new LinearLayout.LayoutParams(dp(90), dp(52)));
+        root.addView(necJump);
+
+        necJumpButton.setOnClickListener(v -> {
+            try {
+                String value = necJumpEdit.getText().toString().trim().toLowerCase(Locale.US);
+                int parsed = value.startsWith("0x")
+                        ? Integer.parseInt(value.substring(2), 16)
+                        : Integer.parseInt(value);
+                if (parsed < 0 || parsed > 255) throw new Exception();
+                necCommand = parsed;
+                persistNecCommand();
+                updateNecCode();
+            } catch (Exception e) {
+                toast("Enter 0–255, or 0x00–0xFF");
+            }
+        });
+
+        TextView necMarkTitle = text("MARK NEC RESPONSE", 15, true);
+        necMarkTitle.setPadding(0, dp(12), 0, dp(4));
+        root.addView(necMarkTitle);
+
+        LinearLayout necRowA = horizontal();
+        LinearLayout necRowB = horizontal();
+        for (int i = 0; i < labels.length; i++) {
+            String label = labels[i];
+            Button response = button(label);
+            response.setTextSize(11);
+            response.setOnClickListener(v -> markNec(label));
+            if (i < 4) necRowA.addView(response, weight());
+            else necRowB.addView(response, weight());
+        }
+        root.addView(necRowA);
+        root.addView(necRowB);
+
+        necNoteEdit = new EditText(this);
+        necNoteEdit.setHint("Optional NEC response note");
+        necNoteEdit.setSingleLine(true);
+        root.addView(necNoteEdit, new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, dp(54)));
+
+        necAutoAdvance = new CheckBox(this);
+        necAutoAdvance.setText("Advance after marking NEC response");
+        necAutoAdvance.setChecked(true);
+        root.addView(necAutoAdvance);
+
+        necAutoSendNext = new CheckBox(this);
+        necAutoSendNext.setText("Send next NEC command immediately after marking");
+        necAutoSendNext.setChecked(true);
+        root.addView(necAutoSendNext);
+
+        Button necExport = button("COPY NEC CSV");
+        root.addView(necExport);
+        necExport.setOnClickListener(v -> copyNecCsv());
+
+        necMarksView = text("", 14, false);
+        necMarksView.setPadding(dp(8), dp(8), dp(8), dp(8));
+        root.addView(necMarksView);
+
+        Button clearNec = button("CLEAR CURRENT NEC MARK");
+        root.addView(clearNec);
+        clearNec.setOnClickListener(v -> {
+            prefs.edit().remove(necKey(necCommand) + "_label")
+                    .remove(necKey(necCommand) + "_note").apply();
+            updateNecCode();
+            updateNecMarks();
+            toast("Current NEC mark cleared");
+        });
+
+        updateNecCode();
+        updateNecMarks();
 
         codeView = text("", 34, true);
         codeView.setGravity(Gravity.CENTER);
@@ -180,17 +412,13 @@ public class MainActivity extends Activity {
         autoAdvance.setChecked(true);
         root.addView(autoAdvance);
 
-        LinearLayout known = horizontal();
-        Button knownA = button("Airmate known codes");
-        Button export = button("COPY CSV");
-        known.addView(knownA, weight());
-        known.addView(export, weight());
-        root.addView(known);
+        autoSendNext = new CheckBox(this);
+        autoSendNext.setText("Send next code immediately after marking");
+        autoSendNext.setChecked(false);
+        root.addView(autoSendNext);
 
-        knownA.setOnClickListener(v ->
-                toastLong("IRDB Airmate F12 D=3 S=1: " +
-                        "Osc 9 (0x09), Timer 17 (0x11), Mode 33 (0x21), " +
-                        "Speed 65 (0x41), Light 99 (0x63), Shutdown 129 (0x81), Presets 195 (0xC3)."));
+        Button export = button("COPY CSV");
+        root.addView(export);
         export.setOnClickListener(v -> copyCsv());
 
         TextView resultsTitle = text("RESPONDING / MARKED CODES", 15, true);
@@ -204,10 +432,14 @@ public class MainActivity extends Activity {
         Button clearCurrent = button("CLEAR CURRENT MARK");
         root.addView(clearCurrent);
         clearCurrent.setOnClickListener(v -> {
-            prefs.edit()
+            SharedPreferences.Editor editor = prefs.edit()
                     .remove(key(function) + "_label")
-                    .remove(key(function) + "_note")
-                    .apply();
+                    .remove(key(function) + "_note");
+            if (selectedModeIndex() == 2) {
+                editor.remove(legacyKey(function) + "_label")
+                        .remove(legacyKey(function) + "_note");
+            }
+            editor.apply();
             updateMarks();
             toast("Current mark cleared");
         });
@@ -245,41 +477,17 @@ public class MainActivity extends Activity {
         subdevice = subdeviceSpinner.getSelectedItemPosition();
 
         try {
-            int[] pattern = buildF12(device, subdevice, function);
+            int mode = selectedModeIndex();
+            int[] pattern = F12Encoder.build(mode, device, subdevice, function);
             ir.transmit(carrier, pattern);
-            statusView.setText("Sent F12  D=" + device +
-                    " S=" + subdevice +
+            statusView.setText("Sent " + shortModeName(mode) + "  D=" + device +
+                    " H/S=" + subdevice +
                     " F=" + function + " (0x" +
                     String.format(Locale.US, "%02X", function) + ")" +
                     "\nPattern entries: " + pattern.length +
                     "   Carrier: " + carrier + " Hz");
         } catch (Exception e) {
             statusView.setText("Transmit failed: " + e);
-        }
-    }
-
-    private int[] buildF12(int d, int s, int f) {
-        final int T = 422;
-        ArrayList<Integer> p = new ArrayList<>();
-
-        for (int frame = 0; frame < 2; frame++) {
-            appendBits(p, d, 3, T);
-            appendBits(p, s, 1, T);
-            appendBits(p, f, 8, T);
-            int last = p.size() - 1;
-            p.set(last, p.get(last) + 80 * T);
-        }
-
-        int[] out = new int[p.size()];
-        for (int i = 0; i < p.size(); i++) out[i] = p.get(i);
-        return out;
-    }
-
-    private void appendBits(ArrayList<Integer> p, int value, int bits, int T) {
-        for (int i = 0; i < bits; i++) {
-            boolean one = ((value >> i) & 1) != 0;
-            p.add(one ? 3 * T : T);
-            p.add(one ? T : 3 * T);
         }
     }
 
@@ -294,13 +502,192 @@ public class MainActivity extends Activity {
         noteEdit.setText("");
         updateMarks();
 
-        if (autoAdvance.isChecked()) changeFunction(1);
+        if (autoAdvance.isChecked()) {
+            changeFunction(1);
+            if (autoSendNext.isChecked()) sendCurrent();
+        }
     }
 
     private String key(int f) {
         int d = deviceSpinner == null ? device : deviceSpinner.getSelectedItemPosition();
         int s = subdeviceSpinner == null ? subdevice : subdeviceSpinner.getSelectedItemPosition();
+        return "M" + selectedModeIndex() + "_D" + d + "_S" + s + "_F" + f;
+    }
+
+    private void sendPowerCandidate() {
+        if (ir == null || !ir.hasIrEmitter()) {
+            toast("Android does not report an IR emitter.");
+            return;
+        }
+        try {
+            PowerCodeCatalog.Candidate candidate = powerCandidates.get(powerIndex);
+            ir.transmit(candidate.carrier, candidate.pattern);
+            statusView.setText("Sent power candidate " + (powerIndex + 1) + "/" +
+                    powerCandidates.size() + "\n" + candidate.label +
+                    "   " + candidate.carrier + " Hz   " +
+                    candidate.pattern.length + " entries");
+        } catch (Exception e) {
+            statusView.setText("Power candidate transmit failed: " + e);
+        }
+    }
+
+    private void changePowerCandidate(int delta) {
+        powerIndex = (powerIndex + delta + powerCandidates.size()) % powerCandidates.size();
+        prefs.edit().putInt("current_power_candidate", powerIndex).apply();
+        updatePowerCandidate();
+    }
+
+    private void markPowerCandidate(boolean worked) {
+        prefs.edit().putBoolean("power_candidate_" + powerIndex + "_tested", true)
+                .putBoolean("power_candidate_" + powerIndex + "_worked", worked)
+                .apply();
+        updatePowerCandidate();
+        if (worked) {
+            toastLong("Power response saved. Scan stopped on this candidate.");
+        } else {
+            if (powerIndex == powerCandidates.size() - 1) {
+                toastLong("Power scan complete: no candidate matched.");
+                return;
+            }
+            changePowerCandidate(1);
+            if (autoSendPowerNext.isChecked()) sendPowerCandidate();
+        }
+    }
+
+    private void updatePowerCandidate() {
+        if (powerCandidateView == null || powerCandidates == null) return;
+        PowerCodeCatalog.Candidate candidate = powerCandidates.get(powerIndex);
+        boolean tested = prefs.getBoolean("power_candidate_" + powerIndex + "_tested", false);
+        boolean worked = prefs.getBoolean("power_candidate_" + powerIndex + "_worked", false);
+        String result = tested ? (worked ? "  ✓ POWER CHANGED" : "  · tested") : "";
+        powerCandidateView.setText((powerIndex + 1) + " / " + powerCandidates.size() +
+                "   " + candidate.label + "\n" + candidate.carrier + " Hz" + result);
+    }
+
+    private void sendNecCurrent() {
+        if (ir == null || !ir.hasIrEmitter()) {
+            toast("Android does not report an IR emitter.");
+            return;
+        }
+        try {
+            int[] pattern = PowerCodeCatalog.buildNec(0x00, necCommand);
+            ir.transmit(38000, pattern);
+            statusView.setText(String.format(Locale.US,
+                    "Sent NEC A=0x00 C=0x%02X   legacy=%s\n%d entries   38000 Hz",
+                    necCommand, legacyNecCode(necCommand), pattern.length));
+        } catch (Exception e) {
+            statusView.setText("NEC transmit failed: " + e);
+        }
+    }
+
+    private void changeNecCommand(int delta) {
+        necCommand = (necCommand + delta) & 0xFF;
+        persistNecCommand();
+        updateNecCode();
+    }
+
+    private void persistNecCommand() {
+        prefs.edit().putInt("current_nec_command", necCommand).apply();
+    }
+
+    private String necKey(int command) {
+        return "NEC_A00_C" + command;
+    }
+
+    private void markNec(String label) {
+        String note = necNoteEdit.getText().toString().trim();
+        prefs.edit().putString(necKey(necCommand) + "_label", label)
+                .putString(necKey(necCommand) + "_note", note).apply();
+        necNoteEdit.setText("");
+        updateNecMarks();
+        if (necAutoAdvance.isChecked()) {
+            changeNecCommand(1);
+            if (necAutoSendNext.isChecked()) sendNecCurrent();
+        }
+    }
+
+    private void updateNecCode() {
+        if (necCodeView != null) {
+            String known = necCommand == 0x45 ? "   • POWER CANDIDATE" : "";
+            necCodeView.setText(String.format(Locale.US,
+                    "C = %d   •   0x%02X%s\n%s",
+                    necCommand, necCommand, known, legacyNecCode(necCommand)));
+        }
+        if (necNoteEdit != null) {
+            necNoteEdit.setText(prefs.getString(necKey(necCommand) + "_note", ""));
+        }
+    }
+
+    private void updateNecMarks() {
+        if (necMarksView == null) return;
+        StringBuilder marked = new StringBuilder("NEC address 0x00 responding commands\n\n");
+        int count = 0;
+        for (int command = 0; command < 256; command++) {
+            String label = prefs.getString(necKey(command) + "_label", null);
+            if (label != null && !label.equals("NO RESPONSE")) {
+                String note = prefs.getString(necKey(command) + "_note", "");
+                marked.append(String.format(Locale.US, "%3d  0x%02X   %-10s",
+                        command, command, label));
+                if (!note.isEmpty()) marked.append("   ").append(note);
+                marked.append("\n");
+                count++;
+            }
+        }
+        if (count == 0) marked.append("No responding NEC commands marked yet.");
+        necMarksView.setText(marked.toString());
+    }
+
+    private void copyNecCsv() {
+        StringBuilder csv = new StringBuilder();
+        csv.append("protocol,address,command_dec,command_hex,legacy_code,result,note\n");
+        for (int command = 0; command < 256; command++) {
+            String label = prefs.getString(necKey(command) + "_label", null);
+            if (label != null) {
+                String note = prefs.getString(necKey(command) + "_note", "");
+                csv.append("NEC,0x00,").append(command).append(",")
+                        .append(String.format(Locale.US, "0x%02X", command)).append(",")
+                        .append(legacyNecCode(command)).append(",")
+                        .append(csvEscape(label)).append(",")
+                        .append(csvEscape(note)).append("\n");
+            }
+        }
+        ClipboardManager clipboard = (ClipboardManager) getSystemService(CLIPBOARD_SERVICE);
+        clipboard.setPrimaryClip(ClipData.newPlainText("NEC fan scan CSV", csv.toString()));
+        toast("NEC CSV copied to clipboard");
+    }
+
+    private String legacyNecCode(int command) {
+        return String.format(Locale.US, "0x%02X%02X%02X%02X",
+                reverseByte(0x00), reverseByte(0xFF),
+                reverseByte(command), reverseByte((~command) & 0xFF));
+    }
+
+    private int reverseByte(int value) {
+        return Integer.reverse(value & 0xFF) >>> 24;
+    }
+
+    private String legacyKey(int f) {
+        int d = deviceSpinner == null ? device : deviceSpinner.getSelectedItemPosition();
+        int s = subdeviceSpinner == null ? subdevice : subdeviceSpinner.getSelectedItemPosition();
         return "D" + d + "_S" + s + "_F" + f;
+    }
+
+    private int selectedModeIndex() {
+        return modeSpinner == null ? 0 : modeSpinner.getSelectedItemPosition();
+    }
+
+    private String shortModeName(int mode) {
+        if (mode == 1) return "F12-0";
+        if (mode == 2) return "Legacy F12";
+        return "F12-1";
+    }
+
+    private String storedString(int f, String suffix, String defaultValue) {
+        String value = prefs.getString(key(f) + suffix, null);
+        if (value == null && selectedModeIndex() == 2) {
+            value = prefs.getString(legacyKey(f) + suffix, null);
+        }
+        return value == null ? defaultValue : value;
     }
 
     private void updateMarks() {
@@ -312,10 +699,9 @@ public class MainActivity extends Activity {
         int count = 0;
 
         for (int f = 0; f < 256; f++) {
-            String base = "D" + d + "_S" + s + "_F" + f;
-            String label = prefs.getString(base + "_label", null);
+            String label = storedString(f, "_label", null);
             if (label != null && !label.equals("NO RESPONSE")) {
-                String note = prefs.getString(base + "_note", "");
+                String note = storedString(f, "_note", "");
                 sb.append(String.format(Locale.US, "%3d  0x%02X   %-10s", f, f, label));
                 if (!note.isEmpty()) sb.append("   ").append(note);
                 sb.append("\n");
@@ -326,7 +712,8 @@ public class MainActivity extends Activity {
         if (count == 0) {
             sb.append("No responding codes marked yet.");
         } else {
-            sb.insert(0, "D=" + d + " S=" + s + "    " + count + " responding code(s)\n\n");
+            sb.insert(0, shortModeName(selectedModeIndex()) + "  D=" + d + " H/S=" + s +
+                    "    " + count + " responding code(s)\n\n");
         }
         marksView.setText(sb.toString());
     }
@@ -336,14 +723,14 @@ public class MainActivity extends Activity {
         int s = subdeviceSpinner.getSelectedItemPosition();
 
         StringBuilder csv = new StringBuilder();
-        csv.append("device,subdevice,function_dec,function_hex,result,note\n");
+        csv.append("mode,device,h_or_subdevice,function_dec,function_hex,result,note\n");
 
         for (int f = 0; f < 256; f++) {
-            String base = "D" + d + "_S" + s + "_F" + f;
-            String label = prefs.getString(base + "_label", null);
+            String label = storedString(f, "_label", null);
             if (label != null) {
-                String note = prefs.getString(base + "_note", "");
-                csv.append(d).append(",")
+                String note = storedString(f, "_note", "");
+                csv.append(csvEscape(shortModeName(selectedModeIndex()))).append(",")
+                        .append(d).append(",")
                         .append(s).append(",")
                         .append(f).append(",")
                         .append(String.format(Locale.US, "0x%02X", f)).append(",")
@@ -378,8 +765,7 @@ public class MainActivity extends Activity {
                     "F = %d   •   0x%02X", function, function));
         }
         if (noteEdit != null) {
-            String base = key(function);
-            noteEdit.setText(prefs.getString(base + "_note", ""));
+            noteEdit.setText(storedString(function, "_note", ""));
         }
     }
 

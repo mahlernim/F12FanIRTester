@@ -1,98 +1,61 @@
-# Quick APK build with GitHub Actions
-
-You do **not** need Android Studio.
-
-1. Create a new empty GitHub repository.
-2. Upload the **contents of this `F12FanIRTester` folder** to the repository root.
-   The repository root should directly contain `app`, `.github`, `build.gradle`, and `settings.gradle`.
-3. Commit/upload the files to `main`.
-4. Open the repository's **Actions** tab.
-5. Open **Build Android APK**.
-6. If it did not start automatically, choose **Run workflow**.
-7. Wait for the green checkmark.
-8. Open the completed run and download the artifact **F12FanIRTester-debug**.
-9. Unzip that artifact to obtain `app-debug.apk`.
-10. Copy `app-debug.apk` to the Xiaomi K50 and install it.
-
-The workflow uses Java 17, Gradle 8.9, Android SDK 35, and builds `assembleDebug`.
-
----
-
 # F12 Fan IR Tester
 
-A tiny Android app for manually scanning F12 infrared function codes.
+A small native Android app for testing fan infrared signals with a phone IR blaster.
 
-Default scan target:
+This repository is a protocol-discovery tool, not an everyday remote. For the
+finished five-button Angelcook `AGC-WL2200WH` remote and reusable DIY codes, see
+[Angelcook Fan Remote](https://github.com/mahlernim/Angelcook-Fan-Remote).
 
-- Protocol: F12
-- Carrier: 37.9 kHz
-- Device: 3
-- Subdevice: 1
-- Function: 0–255
+## Airmate power-code scan
 
-The UI lets you:
+The dedicated power scanner contains 21 deduplicated candidates:
 
-- Send one function at a time
-- Move Previous / Next or ±16
-- Jump to decimal or hex function numbers
-- Mark `NO RESPONSE`, `POWER`, `SPEED +`, `SPEED -`, `OSCILLATE`, `TIMER`, `LIGHT`, or `OTHER`
-- Add an optional note
-- Automatically advance after marking
-- Keep results persistently on the phone
-- Copy the complete scan as CSV
-- Change F12 Device (0–7) and Subdevice (0–1)
+- 19 recorded raw Airmate power waveforms
+- one decoded Airmate NEC power command
+- one independently published generic fan NEC power command
 
-## Why this is a native Android app
+The Airmate candidates come from 25 profiles in the MIT-licensed
+[Flipper Devices IRDB](https://github.com/flipperdevices/IRDB). Duplicate
+waveforms are transmitted only once. Each candidate retains its recorded carrier
+frequency and complete raw timing pattern.
 
-Browsers do not expose Android's ConsumerIrManager API. Native Android code does.
+Press **SEND POWER** for the displayed candidate and then choose:
 
-The app calls:
+- **NO EFFECT** to mark it, advance, and immediately send the next candidate
+- **POWER CHANGED** to save the match and stop automatic transmission
 
-```java
-ConsumerIrManager.transmit(carrierFrequency, pattern)
-```
+The scanner remembers its position and tested results. Previous and next buttons
+allow any candidate to be repeated. See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)
+for attribution.
 
-with an alternating mark/space pattern in microseconds.
+## NEC command scan
 
-## F12 encoding used
+The scanner is configured for NEC address `0x00` and starts at command `0x45`
+(`0x00FFA25D` in the common legacy display), a generic fan power candidate.
 
-From the IrpTransmogrifier protocol definition:
+The dedicated NEC scanner transmits commands `0x00` through `0xFF` at address
+`0x00`. It supports decimal/hex jumping, previous/next and +/-16 navigation,
+response labels, notes, persistent results, and NEC-specific CSV export.
 
-```text
-{37.9k,422}<1,-3|3,-1>((D:3,S:1,F:8,-80)2)*
-```
+With both automatic options enabled, mark each observed result once and the app
+immediately advances and transmits the next NEC command. Command `0x45` is visibly
+identified as the starting power candidate.
 
-Implemented as:
+## F12 comparison scan
 
-- carrier 37,900 Hz
-- time unit T = 422 µs
-- zero bit = 422 µs mark + 1266 µs space
-- one bit = 1266 µs mark + 422 µs space
-- D = 3 bits, LSB first
-- S = 1 bit
-- F = 8 bits, LSB first
-- 80T leadout
-- frame transmitted twice
+The original function scanner remains available for comparing three F12 waveforms:
 
-## Build
+- **F12-1 (default):** four frames with 34T, 88T, and 34T inter-frame gaps
+- **F12-0:** two frames with a 34T inter-frame gap
+- **Legacy F12:** the earlier two-frame implementation with an 80T leadout after each frame
 
-Open this directory in current Android Studio.
+All modes use a 37.9 kHz carrier, T = 422 microseconds, and 12 LSB-first data bits: D (3), H/S (1), and F (8). Device D (0–7), H/S (0–1), and function F (0–255) remain selectable.
 
-If Android Studio asks to install Android SDK 35, allow it.
+The app requires Android's consumer IR API. It requests no Internet or storage permissions.
 
-Then:
+## Fast Airmate test
 
-1. Build > Build APK(s)
-2. Copy/install the debug APK onto the Xiaomi phone
-3. Android may require enabling installation from unknown sources for the file manager/browser used to install it
-
-No network permission and no storage permission are requested.
-
-## Suggested testing
-
-Start with D=3, S=1.
-
-Useful Airmate IRDB function values to test first:
+Start with **F12-1, D=3, H/S=1**. Seven prominent quick-test buttons jump to and immediately transmit these published Airmate function values:
 
 - 9 / 0x09
 - 17 / 0x11
@@ -102,10 +65,28 @@ Useful Airmate IRDB function values to test first:
 - 129 / 0x81
 - 195 / 0xC3
 
-Then scan 0–255 manually.
+After each transmission, mark the observed response. Results are stored separately for every waveform mode, D, H/S, and function combination. Existing results made with the old app remain visible under **Legacy F12**. `COPY CSV` exports the selected mode and includes the mode name in every row.
 
-Keep the fan where you can see it clearly. When a Power code turns it off, turn it back on before continuing.
+For a one-tap-per-code scan, leave **Automatically advance after marking** enabled and turn on **Send next code immediately after marking**. Each response button then saves the current result, advances one function, and transmits the next code.
 
-## Important
+The full 0–255 scan, decimal/hex jump, previous/next and +/-16 navigation, notes, automatic advance, and response marking remain available.
 
-The Airmate LBT-F01 profile used by the phone app may not correspond exactly to the public Airmate IRDB profile. D=3/S=1 is therefore a strong hypothesis, not yet proven. The app allows D and S to be changed if necessary.
+## Build with GitHub Actions
+
+The `Build Android APK` workflow runs unit tests, builds the debug APK, and uploads the artifact `F12FanIRTester-debug`. It uses Java 17, Gradle 8.9, Android SDK 35, and Android Gradle Plugin 8.7.3.
+
+You can also open the repository in Android Studio and choose **Build > Build APK(s)**.
+
+## Protocol source
+
+The waveform definitions follow HARCToolbox's current `IrpProtocols.xml` entries:
+
+```text
+F12-0: (D:3,H:1,F:8,-34,D:3,H:1,F:8) {H=0}
+F12-1: (D:3,H:1,F:8,-34,D:3,H:1,F:8,-88,D:3,H:1,F:8,-34,D:3,H:1,F:8)* {H=1}
+Legacy F12: ((D:3,S:1,F:8,-80)2)*
+```
+
+The app intentionally leaves H/S selectable in every waveform mode for controlled comparison, even though the formal F12-0 and F12-1 definitions constrain H to 0 and 1 respectively.
+
+The public Airmate profile is a useful lead, not proof that a specific fan model uses this protocol.
