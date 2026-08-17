@@ -21,13 +21,21 @@ public class MainActivity extends Activity {
     private int subdevice = 1;
     private int carrier = 37900;
 
+    private static final String MODE_F12_1 = "F12-1 (4 frames: 34T / 88T / 34T)";
+    private static final String MODE_F12_0 = "F12-0 (2 frames: 34T)";
+    private static final String MODE_LEGACY = "Legacy F12 (2 frames: 80T / 80T)";
+    private static final String[] MODES = {MODE_F12_1, MODE_F12_0, MODE_LEGACY};
+    private static final int[] AIRMATE_FUNCTIONS = {9, 17, 33, 65, 99, 129, 195};
+
     private TextView statusView;
     private TextView codeView;
     private TextView marksView;
     private EditText noteEdit;
     private CheckBox autoAdvance;
+    private CheckBox autoSendNext;
     private Spinner deviceSpinner;
     private Spinner subdeviceSpinner;
+    private Spinner modeSpinner;
 
     private final String[] labels = {
             "NO RESPONSE", "POWER", "SPEED +", "SPEED -",
@@ -59,7 +67,7 @@ public class MainActivity extends Activity {
         root.addView(title);
 
         TextView intro = text(
-                "Defaults: F12, 37.9 kHz, Device 3, Subdevice 1.\n" +
+                "Default: corrected F12-1, 37.9 kHz, Device 3, H/S 1.\n" +
                 "Aim the phone IR blaster at the fan, press SEND, then mark what happened.",
                 14, false);
         intro.setPadding(0, dp(4), 0, dp(8));
@@ -67,6 +75,19 @@ public class MainActivity extends Activity {
 
         statusView = text("", 13, false);
         root.addView(statusView);
+
+        TextView modeLabel = text("WAVEFORM MODE", 14, true);
+        modeLabel.setPadding(0, dp(10), 0, 0);
+        root.addView(modeLabel);
+
+        modeSpinner = new Spinner(this);
+        ArrayAdapter<String> modeAdapter = new ArrayAdapter<>(this,
+                android.R.layout.simple_spinner_item, MODES);
+        modeAdapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
+        modeSpinner.setAdapter(modeAdapter);
+        modeSpinner.setSelection(prefs.getInt("current_mode", 0));
+        root.addView(modeSpinner, new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, dp(52)));
 
         LinearLayout settings = horizontal();
         settings.setGravity(Gravity.CENTER_VERTICAL);
@@ -80,10 +101,10 @@ public class MainActivity extends Activity {
                 new String[]{"0","1","2","3","4","5","6","7"});
         dAdapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
         deviceSpinner.setAdapter(dAdapter);
-        deviceSpinner.setSelection(3);
+        deviceSpinner.setSelection(prefs.getInt("current_device", 3));
         settings.addView(deviceSpinner, new LinearLayout.LayoutParams(0, dp(52), 1));
 
-        TextView sLabel = text("S", 14, true);
+        TextView sLabel = text("H/S", 14, true);
         sLabel.setPadding(dp(12), 0, 0, 0);
         settings.addView(sLabel);
 
@@ -93,10 +114,52 @@ public class MainActivity extends Activity {
                 new String[]{"0","1"});
         sAdapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
         subdeviceSpinner.setAdapter(sAdapter);
-        subdeviceSpinner.setSelection(1);
+        subdeviceSpinner.setSelection(prefs.getInt("current_subdevice", 1));
         settings.addView(subdeviceSpinner, new LinearLayout.LayoutParams(0, dp(52), 1));
 
         root.addView(settings);
+
+        AdapterView.OnItemSelectedListener settingsListener = new AdapterView.OnItemSelectedListener() {
+            @Override
+            public void onItemSelected(AdapterView<?> parent, View view, int position, long id) {
+                prefs.edit()
+                        .putInt("current_mode", modeSpinner.getSelectedItemPosition())
+                        .putInt("current_device", deviceSpinner.getSelectedItemPosition())
+                        .putInt("current_subdevice", subdeviceSpinner.getSelectedItemPosition())
+                        .apply();
+                updateCode();
+                updateMarks();
+            }
+
+            @Override
+            public void onNothingSelected(AdapterView<?> parent) { }
+        };
+        modeSpinner.setOnItemSelectedListener(settingsListener);
+        deviceSpinner.setOnItemSelectedListener(settingsListener);
+        subdeviceSpinner.setOnItemSelectedListener(settingsListener);
+
+        TextView quickTitle = text("QUICK TEST AIRMATE VALUES (tap to send)", 15, true);
+        quickTitle.setPadding(0, dp(12), 0, dp(4));
+        root.addView(quickTitle);
+
+        LinearLayout quickA = horizontal();
+        LinearLayout quickB = horizontal();
+        for (int i = 0; i < AIRMATE_FUNCTIONS.length; i++) {
+            int quickFunction = AIRMATE_FUNCTIONS[i];
+            Button quick = button(quickFunction + "\n0x" +
+                    String.format(Locale.US, "%02X", quickFunction));
+            quick.setTextSize(11);
+            quick.setOnClickListener(v -> {
+                function = quickFunction;
+                persistCurrent();
+                updateCode();
+                sendCurrent();
+            });
+            if (i < 4) quickA.addView(quick, weight());
+            else quickB.addView(quick, weight());
+        }
+        root.addView(quickA);
+        root.addView(quickB);
 
         codeView = text("", 34, true);
         codeView.setGravity(Gravity.CENTER);
@@ -180,17 +243,13 @@ public class MainActivity extends Activity {
         autoAdvance.setChecked(true);
         root.addView(autoAdvance);
 
-        LinearLayout known = horizontal();
-        Button knownA = button("Airmate known codes");
-        Button export = button("COPY CSV");
-        known.addView(knownA, weight());
-        known.addView(export, weight());
-        root.addView(known);
+        autoSendNext = new CheckBox(this);
+        autoSendNext.setText("Send next code immediately after marking");
+        autoSendNext.setChecked(false);
+        root.addView(autoSendNext);
 
-        knownA.setOnClickListener(v ->
-                toastLong("IRDB Airmate F12 D=3 S=1: " +
-                        "Osc 9 (0x09), Timer 17 (0x11), Mode 33 (0x21), " +
-                        "Speed 65 (0x41), Light 99 (0x63), Shutdown 129 (0x81), Presets 195 (0xC3)."));
+        Button export = button("COPY CSV");
+        root.addView(export);
         export.setOnClickListener(v -> copyCsv());
 
         TextView resultsTitle = text("RESPONDING / MARKED CODES", 15, true);
@@ -204,10 +263,14 @@ public class MainActivity extends Activity {
         Button clearCurrent = button("CLEAR CURRENT MARK");
         root.addView(clearCurrent);
         clearCurrent.setOnClickListener(v -> {
-            prefs.edit()
+            SharedPreferences.Editor editor = prefs.edit()
                     .remove(key(function) + "_label")
-                    .remove(key(function) + "_note")
-                    .apply();
+                    .remove(key(function) + "_note");
+            if (selectedModeIndex() == 2) {
+                editor.remove(legacyKey(function) + "_label")
+                        .remove(legacyKey(function) + "_note");
+            }
+            editor.apply();
             updateMarks();
             toast("Current mark cleared");
         });
@@ -245,41 +308,17 @@ public class MainActivity extends Activity {
         subdevice = subdeviceSpinner.getSelectedItemPosition();
 
         try {
-            int[] pattern = buildF12(device, subdevice, function);
+            int mode = selectedModeIndex();
+            int[] pattern = F12Encoder.build(mode, device, subdevice, function);
             ir.transmit(carrier, pattern);
-            statusView.setText("Sent F12  D=" + device +
-                    " S=" + subdevice +
+            statusView.setText("Sent " + shortModeName(mode) + "  D=" + device +
+                    " H/S=" + subdevice +
                     " F=" + function + " (0x" +
                     String.format(Locale.US, "%02X", function) + ")" +
                     "\nPattern entries: " + pattern.length +
                     "   Carrier: " + carrier + " Hz");
         } catch (Exception e) {
             statusView.setText("Transmit failed: " + e);
-        }
-    }
-
-    private int[] buildF12(int d, int s, int f) {
-        final int T = 422;
-        ArrayList<Integer> p = new ArrayList<>();
-
-        for (int frame = 0; frame < 2; frame++) {
-            appendBits(p, d, 3, T);
-            appendBits(p, s, 1, T);
-            appendBits(p, f, 8, T);
-            int last = p.size() - 1;
-            p.set(last, p.get(last) + 80 * T);
-        }
-
-        int[] out = new int[p.size()];
-        for (int i = 0; i < p.size(); i++) out[i] = p.get(i);
-        return out;
-    }
-
-    private void appendBits(ArrayList<Integer> p, int value, int bits, int T) {
-        for (int i = 0; i < bits; i++) {
-            boolean one = ((value >> i) & 1) != 0;
-            p.add(one ? 3 * T : T);
-            p.add(one ? T : 3 * T);
         }
     }
 
@@ -294,13 +333,40 @@ public class MainActivity extends Activity {
         noteEdit.setText("");
         updateMarks();
 
-        if (autoAdvance.isChecked()) changeFunction(1);
+        if (autoAdvance.isChecked()) {
+            changeFunction(1);
+            if (autoSendNext.isChecked()) sendCurrent();
+        }
     }
 
     private String key(int f) {
         int d = deviceSpinner == null ? device : deviceSpinner.getSelectedItemPosition();
         int s = subdeviceSpinner == null ? subdevice : subdeviceSpinner.getSelectedItemPosition();
+        return "M" + selectedModeIndex() + "_D" + d + "_S" + s + "_F" + f;
+    }
+
+    private String legacyKey(int f) {
+        int d = deviceSpinner == null ? device : deviceSpinner.getSelectedItemPosition();
+        int s = subdeviceSpinner == null ? subdevice : subdeviceSpinner.getSelectedItemPosition();
         return "D" + d + "_S" + s + "_F" + f;
+    }
+
+    private int selectedModeIndex() {
+        return modeSpinner == null ? 0 : modeSpinner.getSelectedItemPosition();
+    }
+
+    private String shortModeName(int mode) {
+        if (mode == 1) return "F12-0";
+        if (mode == 2) return "Legacy F12";
+        return "F12-1";
+    }
+
+    private String storedString(int f, String suffix, String defaultValue) {
+        String value = prefs.getString(key(f) + suffix, null);
+        if (value == null && selectedModeIndex() == 2) {
+            value = prefs.getString(legacyKey(f) + suffix, null);
+        }
+        return value == null ? defaultValue : value;
     }
 
     private void updateMarks() {
@@ -312,10 +378,9 @@ public class MainActivity extends Activity {
         int count = 0;
 
         for (int f = 0; f < 256; f++) {
-            String base = "D" + d + "_S" + s + "_F" + f;
-            String label = prefs.getString(base + "_label", null);
+            String label = storedString(f, "_label", null);
             if (label != null && !label.equals("NO RESPONSE")) {
-                String note = prefs.getString(base + "_note", "");
+                String note = storedString(f, "_note", "");
                 sb.append(String.format(Locale.US, "%3d  0x%02X   %-10s", f, f, label));
                 if (!note.isEmpty()) sb.append("   ").append(note);
                 sb.append("\n");
@@ -326,7 +391,8 @@ public class MainActivity extends Activity {
         if (count == 0) {
             sb.append("No responding codes marked yet.");
         } else {
-            sb.insert(0, "D=" + d + " S=" + s + "    " + count + " responding code(s)\n\n");
+            sb.insert(0, shortModeName(selectedModeIndex()) + "  D=" + d + " H/S=" + s +
+                    "    " + count + " responding code(s)\n\n");
         }
         marksView.setText(sb.toString());
     }
@@ -336,14 +402,14 @@ public class MainActivity extends Activity {
         int s = subdeviceSpinner.getSelectedItemPosition();
 
         StringBuilder csv = new StringBuilder();
-        csv.append("device,subdevice,function_dec,function_hex,result,note\n");
+        csv.append("mode,device,h_or_subdevice,function_dec,function_hex,result,note\n");
 
         for (int f = 0; f < 256; f++) {
-            String base = "D" + d + "_S" + s + "_F" + f;
-            String label = prefs.getString(base + "_label", null);
+            String label = storedString(f, "_label", null);
             if (label != null) {
-                String note = prefs.getString(base + "_note", "");
-                csv.append(d).append(",")
+                String note = storedString(f, "_note", "");
+                csv.append(csvEscape(shortModeName(selectedModeIndex()))).append(",")
+                        .append(d).append(",")
                         .append(s).append(",")
                         .append(f).append(",")
                         .append(String.format(Locale.US, "0x%02X", f)).append(",")
@@ -378,8 +444,7 @@ public class MainActivity extends Activity {
                     "F = %d   •   0x%02X", function, function));
         }
         if (noteEdit != null) {
-            String base = key(function);
-            noteEdit.setText(prefs.getString(base + "_note", ""));
+            noteEdit.setText(storedString(function, "_note", ""));
         }
     }
 
