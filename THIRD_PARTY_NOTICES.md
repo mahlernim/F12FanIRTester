@@ -27,4 +27,5 @@ MIT License:
 > SOFTWARE.
 
 The final generic NEC fan candidate is based on the independently published
-fan power command `NEC address 0x00, command 0x45`.
+fan power command `NEC address 0x00, command 0x45`, archived in this
+[public fan-code reference](https://gist.github.com/Keeo/05d2f27e5a8c4b9969b83112c7e17c95).

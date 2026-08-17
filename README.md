@@ -2,6 +2,10 @@
 
 A small native Android app for testing fan infrared signals with a phone IR blaster.
 
+This repository is a protocol-discovery tool, not an everyday remote. For the
+finished five-button Angelcook `AGC-WL2200WH` remote and reusable DIY codes, see
+[Angelicook Fan Remote](https://github.com/mahlernim/Angelicook-Fan-Remote).
+
 ## Airmate power-code scan
 
 The dedicated power scanner contains 21 deduplicated candidates:
