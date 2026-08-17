@@ -4,7 +4,7 @@ A small native Android app for testing fan infrared signals with a phone IR blas
 
 This repository is a protocol-discovery tool, not an everyday remote. For the
 finished five-button Angelcook `AGC-WL2200WH` remote and reusable DIY codes, see
-[Angelicook Fan Remote](https://github.com/mahlernim/Angelicook-Fan-Remote).
+[Angelcook Fan Remote](https://github.com/mahlernim/Angelcook-Fan-Remote).
 
 ## Airmate power-code scan
 
