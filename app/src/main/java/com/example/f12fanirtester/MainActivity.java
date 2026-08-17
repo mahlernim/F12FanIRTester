@@ -20,6 +20,8 @@ public class MainActivity extends Activity {
     private int device = 3;
     private int subdevice = 1;
     private int carrier = 37900;
+    private int powerIndex = 0;
+    private List<PowerCodeCatalog.Candidate> powerCandidates;
 
     private static final String MODE_F12_1 = "F12-1 (4 frames: 34T / 88T / 34T)";
     private static final String MODE_F12_0 = "F12-0 (2 frames: 34T)";
@@ -36,6 +38,8 @@ public class MainActivity extends Activity {
     private Spinner deviceSpinner;
     private Spinner subdeviceSpinner;
     private Spinner modeSpinner;
+    private TextView powerCandidateView;
+    private CheckBox autoSendPowerNext;
 
     private final String[] labels = {
             "NO RESPONSE", "POWER", "SPEED +", "SPEED -",
@@ -49,6 +53,9 @@ public class MainActivity extends Activity {
         ir = (ConsumerIrManager) getSystemService(CONSUMER_IR_SERVICE);
         prefs = getSharedPreferences("results", MODE_PRIVATE);
         function = prefs.getInt("current_function", 0);
+        powerCandidates = PowerCodeCatalog.load();
+        powerIndex = Math.min(prefs.getInt("current_power_candidate", 0),
+                powerCandidates.size() - 1);
 
         setContentView(buildUi());
         updateIrStatus();
@@ -63,7 +70,7 @@ public class MainActivity extends Activity {
         root.setPadding(dp(16), dp(12), dp(16), dp(24));
         scroll.addView(root);
 
-        TextView title = text("F12 Fan IR Tester", 24, true);
+        TextView title = text("Fan IR Tester", 24, true);
         root.addView(title);
 
         TextView intro = text(
@@ -160,6 +167,50 @@ public class MainActivity extends Activity {
         }
         root.addView(quickA);
         root.addView(quickB);
+
+        TextView powerScanTitle = text("AIRMATE POWER-CODE SCAN", 17, true);
+        powerScanTitle.setPadding(0, dp(18), 0, dp(4));
+        root.addView(powerScanTitle);
+
+        TextView powerHelp = text(
+                "21 known power candidates: 20 unique Airmate signals plus one generic fan fallback. " +
+                "Press SEND POWER once, then mark the result.", 13, false);
+        root.addView(powerHelp);
+
+        powerCandidateView = text("", 16, true);
+        powerCandidateView.setGravity(Gravity.CENTER);
+        powerCandidateView.setPadding(0, dp(10), 0, dp(8));
+        root.addView(powerCandidateView);
+
+        LinearLayout powerNav = horizontal();
+        Button previousPower = button("PREV");
+        Button sendPower = button("SEND POWER");
+        Button nextPower = button("NEXT");
+        powerNav.addView(previousPower, weight());
+        powerNav.addView(sendPower, weight());
+        powerNav.addView(nextPower, weight());
+        root.addView(powerNav);
+
+        previousPower.setOnClickListener(v -> changePowerCandidate(-1));
+        sendPower.setOnClickListener(v -> sendPowerCandidate());
+        nextPower.setOnClickListener(v -> changePowerCandidate(1));
+
+        LinearLayout powerMark = horizontal();
+        Button noPowerEffect = button("NO EFFECT");
+        Button powerWorked = button("POWER CHANGED");
+        powerMark.addView(noPowerEffect, weight());
+        powerMark.addView(powerWorked, weight());
+        root.addView(powerMark);
+
+        noPowerEffect.setOnClickListener(v -> markPowerCandidate(false));
+        powerWorked.setOnClickListener(v -> markPowerCandidate(true));
+
+        autoSendPowerNext = new CheckBox(this);
+        autoSendPowerNext.setText("After NO EFFECT, advance and send the next power candidate");
+        autoSendPowerNext.setChecked(true);
+        root.addView(autoSendPowerNext);
+
+        updatePowerCandidate();
 
         codeView = text("", 34, true);
         codeView.setGravity(Gravity.CENTER);
@@ -343,6 +394,56 @@ public class MainActivity extends Activity {
         int d = deviceSpinner == null ? device : deviceSpinner.getSelectedItemPosition();
         int s = subdeviceSpinner == null ? subdevice : subdeviceSpinner.getSelectedItemPosition();
         return "M" + selectedModeIndex() + "_D" + d + "_S" + s + "_F" + f;
+    }
+
+    private void sendPowerCandidate() {
+        if (ir == null || !ir.hasIrEmitter()) {
+            toast("Android does not report an IR emitter.");
+            return;
+        }
+        try {
+            PowerCodeCatalog.Candidate candidate = powerCandidates.get(powerIndex);
+            ir.transmit(candidate.carrier, candidate.pattern);
+            statusView.setText("Sent power candidate " + (powerIndex + 1) + "/" +
+                    powerCandidates.size() + "\n" + candidate.label +
+                    "   " + candidate.carrier + " Hz   " +
+                    candidate.pattern.length + " entries");
+        } catch (Exception e) {
+            statusView.setText("Power candidate transmit failed: " + e);
+        }
+    }
+
+    private void changePowerCandidate(int delta) {
+        powerIndex = (powerIndex + delta + powerCandidates.size()) % powerCandidates.size();
+        prefs.edit().putInt("current_power_candidate", powerIndex).apply();
+        updatePowerCandidate();
+    }
+
+    private void markPowerCandidate(boolean worked) {
+        prefs.edit().putBoolean("power_candidate_" + powerIndex + "_tested", true)
+                .putBoolean("power_candidate_" + powerIndex + "_worked", worked)
+                .apply();
+        updatePowerCandidate();
+        if (worked) {
+            toastLong("Power response saved. Scan stopped on this candidate.");
+        } else {
+            if (powerIndex == powerCandidates.size() - 1) {
+                toastLong("Power scan complete: no candidate matched.");
+                return;
+            }
+            changePowerCandidate(1);
+            if (autoSendPowerNext.isChecked()) sendPowerCandidate();
+        }
+    }
+
+    private void updatePowerCandidate() {
+        if (powerCandidateView == null || powerCandidates == null) return;
+        PowerCodeCatalog.Candidate candidate = powerCandidates.get(powerIndex);
+        boolean tested = prefs.getBoolean("power_candidate_" + powerIndex + "_tested", false);
+        boolean worked = prefs.getBoolean("power_candidate_" + powerIndex + "_worked", false);
+        String result = tested ? (worked ? "  ✓ POWER CHANGED" : "  · tested") : "";
+        powerCandidateView.setText((powerIndex + 1) + " / " + powerCandidates.size() +
+                "   " + candidate.label + "\n" + candidate.carrier + " Hz" + result);
     }
 
     private String legacyKey(int f) {

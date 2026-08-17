@@ -1,6 +1,32 @@
 # F12 Fan IR Tester
 
-A small native Android app for testing and comparing three F12 infrared waveforms with a phone IR blaster:
+A small native Android app for testing fan infrared signals with a phone IR blaster.
+
+## Airmate power-code scan
+
+The dedicated power scanner contains 21 deduplicated candidates:
+
+- 19 recorded raw Airmate power waveforms
+- one decoded Airmate NEC power command
+- one independently published generic fan NEC power command
+
+The Airmate candidates come from 25 profiles in the MIT-licensed
+[Flipper Devices IRDB](https://github.com/flipperdevices/IRDB). Duplicate
+waveforms are transmitted only once. Each candidate retains its recorded carrier
+frequency and complete raw timing pattern.
+
+Press **SEND POWER** for the displayed candidate and then choose:
+
+- **NO EFFECT** to mark it, advance, and immediately send the next candidate
+- **POWER CHANGED** to save the match and stop automatic transmission
+
+The scanner remembers its position and tested results. Previous and next buttons
+allow any candidate to be repeated. See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)
+for attribution.
+
+## F12 comparison scan
+
+The original function scanner remains available for comparing three F12 waveforms:
 
 - **F12-1 (default):** four frames with 34T, 88T, and 34T inter-frame gaps
 - **F12-0:** two frames with a 34T inter-frame gap
