@@ -21,6 +21,7 @@ public class MainActivity extends Activity {
     private int subdevice = 1;
     private int carrier = 37900;
     private int powerIndex = 0;
+    private int necCommand = 0x45;
     private List<PowerCodeCatalog.Candidate> powerCandidates;
 
     private static final String MODE_F12_1 = "F12-1 (4 frames: 34T / 88T / 34T)";
@@ -40,6 +41,11 @@ public class MainActivity extends Activity {
     private Spinner modeSpinner;
     private TextView powerCandidateView;
     private CheckBox autoSendPowerNext;
+    private TextView necCodeView;
+    private TextView necMarksView;
+    private EditText necNoteEdit;
+    private CheckBox necAutoAdvance;
+    private CheckBox necAutoSendNext;
 
     private final String[] labels = {
             "NO RESPONSE", "POWER", "SPEED +", "SPEED -",
@@ -56,6 +62,7 @@ public class MainActivity extends Activity {
         powerCandidates = PowerCodeCatalog.load();
         powerIndex = Math.min(prefs.getInt("current_power_candidate", 0),
                 powerCandidates.size() - 1);
+        necCommand = prefs.getInt("current_nec_command", 0x45);
 
         setContentView(buildUi());
         updateIrStatus();
@@ -211,6 +218,117 @@ public class MainActivity extends Activity {
         root.addView(autoSendPowerNext);
 
         updatePowerCandidate();
+
+        TextView necTitle = text("CONFIRMED NEC COMMAND SCAN", 17, true);
+        necTitle.setPadding(0, dp(20), 0, dp(4));
+        root.addView(necTitle);
+
+        TextView necHelp = text(
+                "Confirmed protocol: NEC address 0x00. Power is command 0x45. " +
+                "Scan commands 0–255 to identify the remaining controls.", 13, false);
+        root.addView(necHelp);
+
+        necCodeView = text("", 24, true);
+        necCodeView.setGravity(Gravity.CENTER);
+        necCodeView.setPadding(0, dp(10), 0, dp(10));
+        root.addView(necCodeView);
+
+        LinearLayout necNav = horizontal();
+        Button necMinus16 = button("-16");
+        Button necPrevious = button("PREV");
+        Button necSend = button("SEND NEC");
+        Button necNext = button("NEXT");
+        Button necPlus16 = button("+16");
+        necNav.addView(necMinus16, weight());
+        necNav.addView(necPrevious, weight());
+        necNav.addView(necSend, weight());
+        necNav.addView(necNext, weight());
+        necNav.addView(necPlus16, weight());
+        root.addView(necNav);
+
+        necMinus16.setOnClickListener(v -> changeNecCommand(-16));
+        necPrevious.setOnClickListener(v -> changeNecCommand(-1));
+        necSend.setOnClickListener(v -> sendNecCurrent());
+        necNext.setOnClickListener(v -> changeNecCommand(1));
+        necPlus16.setOnClickListener(v -> changeNecCommand(16));
+
+        LinearLayout necJump = horizontal();
+        EditText necJumpEdit = new EditText(this);
+        necJumpEdit.setSingleLine(true);
+        necJumpEdit.setHint("command, e.g. 69 or 0x45");
+        Button necJumpButton = button("GO");
+        necJump.addView(necJumpEdit, new LinearLayout.LayoutParams(0, dp(52), 1));
+        necJump.addView(necJumpButton, new LinearLayout.LayoutParams(dp(90), dp(52)));
+        root.addView(necJump);
+
+        necJumpButton.setOnClickListener(v -> {
+            try {
+                String value = necJumpEdit.getText().toString().trim().toLowerCase(Locale.US);
+                int parsed = value.startsWith("0x")
+                        ? Integer.parseInt(value.substring(2), 16)
+                        : Integer.parseInt(value);
+                if (parsed < 0 || parsed > 255) throw new Exception();
+                necCommand = parsed;
+                persistNecCommand();
+                updateNecCode();
+            } catch (Exception e) {
+                toast("Enter 0–255, or 0x00–0xFF");
+            }
+        });
+
+        TextView necMarkTitle = text("MARK NEC RESPONSE", 15, true);
+        necMarkTitle.setPadding(0, dp(12), 0, dp(4));
+        root.addView(necMarkTitle);
+
+        LinearLayout necRowA = horizontal();
+        LinearLayout necRowB = horizontal();
+        for (int i = 0; i < labels.length; i++) {
+            String label = labels[i];
+            Button response = button(label);
+            response.setTextSize(11);
+            response.setOnClickListener(v -> markNec(label));
+            if (i < 4) necRowA.addView(response, weight());
+            else necRowB.addView(response, weight());
+        }
+        root.addView(necRowA);
+        root.addView(necRowB);
+
+        necNoteEdit = new EditText(this);
+        necNoteEdit.setHint("Optional NEC response note");
+        necNoteEdit.setSingleLine(true);
+        root.addView(necNoteEdit, new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, dp(54)));
+
+        necAutoAdvance = new CheckBox(this);
+        necAutoAdvance.setText("Advance after marking NEC response");
+        necAutoAdvance.setChecked(true);
+        root.addView(necAutoAdvance);
+
+        necAutoSendNext = new CheckBox(this);
+        necAutoSendNext.setText("Send next NEC command immediately after marking");
+        necAutoSendNext.setChecked(true);
+        root.addView(necAutoSendNext);
+
+        Button necExport = button("COPY NEC CSV");
+        root.addView(necExport);
+        necExport.setOnClickListener(v -> copyNecCsv());
+
+        necMarksView = text("", 14, false);
+        necMarksView.setPadding(dp(8), dp(8), dp(8), dp(8));
+        root.addView(necMarksView);
+
+        Button clearNec = button("CLEAR CURRENT NEC MARK");
+        root.addView(clearNec);
+        clearNec.setOnClickListener(v -> {
+            prefs.edit().remove(necKey(necCommand) + "_label")
+                    .remove(necKey(necCommand) + "_note").apply();
+            updateNecCode();
+            updateNecMarks();
+            toast("Current NEC mark cleared");
+        });
+
+        updateNecCode();
+        updateNecMarks();
 
         codeView = text("", 34, true);
         codeView.setGravity(Gravity.CENTER);
@@ -444,6 +562,108 @@ public class MainActivity extends Activity {
         String result = tested ? (worked ? "  ✓ POWER CHANGED" : "  · tested") : "";
         powerCandidateView.setText((powerIndex + 1) + " / " + powerCandidates.size() +
                 "   " + candidate.label + "\n" + candidate.carrier + " Hz" + result);
+    }
+
+    private void sendNecCurrent() {
+        if (ir == null || !ir.hasIrEmitter()) {
+            toast("Android does not report an IR emitter.");
+            return;
+        }
+        try {
+            int[] pattern = PowerCodeCatalog.buildNec(0x00, necCommand);
+            ir.transmit(38000, pattern);
+            statusView.setText(String.format(Locale.US,
+                    "Sent NEC A=0x00 C=0x%02X   legacy=%s\n%d entries   38000 Hz",
+                    necCommand, legacyNecCode(necCommand), pattern.length));
+        } catch (Exception e) {
+            statusView.setText("NEC transmit failed: " + e);
+        }
+    }
+
+    private void changeNecCommand(int delta) {
+        necCommand = (necCommand + delta) & 0xFF;
+        persistNecCommand();
+        updateNecCode();
+    }
+
+    private void persistNecCommand() {
+        prefs.edit().putInt("current_nec_command", necCommand).apply();
+    }
+
+    private String necKey(int command) {
+        return "NEC_A00_C" + command;
+    }
+
+    private void markNec(String label) {
+        String note = necNoteEdit.getText().toString().trim();
+        prefs.edit().putString(necKey(necCommand) + "_label", label)
+                .putString(necKey(necCommand) + "_note", note).apply();
+        necNoteEdit.setText("");
+        updateNecMarks();
+        if (necAutoAdvance.isChecked()) {
+            changeNecCommand(1);
+            if (necAutoSendNext.isChecked()) sendNecCurrent();
+        }
+    }
+
+    private void updateNecCode() {
+        if (necCodeView != null) {
+            String known = necCommand == 0x45 ? "   ✓ CONFIRMED POWER" : "";
+            necCodeView.setText(String.format(Locale.US,
+                    "C = %d   •   0x%02X%s\n%s",
+                    necCommand, necCommand, known, legacyNecCode(necCommand)));
+        }
+        if (necNoteEdit != null) {
+            necNoteEdit.setText(prefs.getString(necKey(necCommand) + "_note", ""));
+        }
+    }
+
+    private void updateNecMarks() {
+        if (necMarksView == null) return;
+        StringBuilder marked = new StringBuilder("NEC address 0x00 responding commands\n\n");
+        int count = 0;
+        for (int command = 0; command < 256; command++) {
+            String label = prefs.getString(necKey(command) + "_label", null);
+            if (label != null && !label.equals("NO RESPONSE")) {
+                String note = prefs.getString(necKey(command) + "_note", "");
+                marked.append(String.format(Locale.US, "%3d  0x%02X   %-10s",
+                        command, command, label));
+                if (!note.isEmpty()) marked.append("   ").append(note);
+                marked.append("\n");
+                count++;
+            }
+        }
+        if (count == 0) marked.append("No responding NEC commands marked yet.");
+        necMarksView.setText(marked.toString());
+    }
+
+    private void copyNecCsv() {
+        StringBuilder csv = new StringBuilder();
+        csv.append("protocol,address,command_dec,command_hex,legacy_code,result,note\n");
+        for (int command = 0; command < 256; command++) {
+            String label = prefs.getString(necKey(command) + "_label", null);
+            if (label != null) {
+                String note = prefs.getString(necKey(command) + "_note", "");
+                csv.append("NEC,0x00,").append(command).append(",")
+                        .append(String.format(Locale.US, "0x%02X", command)).append(",")
+                        .append(legacyNecCode(command)).append(",")
+                        .append(csvEscape(label)).append(",")
+                        .append(csvEscape(note)).append("\n");
+            }
+        }
+        ClipboardManager clipboard = (ClipboardManager) getSystemService(CLIPBOARD_SERVICE);
+        clipboard.setPrimaryClip(ClipData.newPlainText("NEC fan scan CSV", csv.toString()));
+        toast("NEC CSV copied to clipboard");
+    }
+
+    private String legacyNecCode(int command) {
+        return String.format(Locale.US, "0x%02X%02X%02X%02X",
+                reverseByte(0x00), reverseByte(0xFF),
+                reverseByte(command), reverseByte((~command) & 0xFF));
+    }
+
+    private int reverseByte(int value) {
+        return Integer.reverse(value & 0xFF) >>> 24;
     }
 
     private String legacyKey(int f) {

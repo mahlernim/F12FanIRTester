@@ -24,6 +24,23 @@ The scanner remembers its position and tested results. Previous and next buttons
 allow any candidate to be repeated. See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)
 for attribution.
 
+## Confirmed NEC command scan
+
+Candidate 21 successfully controlled the target fan, confirming:
+
+- protocol: NEC
+- address: `0x00`
+- power command: `0x45`
+- legacy display: `0x00FFA25D`
+
+The dedicated NEC scanner transmits commands `0x00` through `0xFF` at address
+`0x00`. It supports decimal/hex jumping, previous/next and +/-16 navigation,
+response labels, notes, persistent results, and NEC-specific CSV export.
+
+With both automatic options enabled, mark each observed result once and the app
+immediately advances and transmits the next NEC command. Command `0x45` is visibly
+identified as the confirmed power command.
+
 ## F12 comparison scan
 
 The original function scanner remains available for comparing three F12 waveforms:

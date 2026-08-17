@@ -1,6 +1,7 @@
 package com.example.f12fanirtester;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertThrows;
 import static org.junit.Assert.assertTrue;
 
 import java.util.Arrays;
@@ -32,5 +33,36 @@ public class PowerCodeCatalogTest {
             assertTrue(candidate.label, waveforms.add(candidate.carrier + ":" +
                     Arrays.toString(candidate.pattern)));
         }
+    }
+
+    @Test
+    public void necEncoderProducesConfirmedPowerPayload() {
+        int[] pattern = PowerCodeCatalog.buildNec(0x00, 0x45);
+        assertEquals(68, pattern.length);
+        assertEquals(9000, pattern[0]);
+        assertEquals(4500, pattern[1]);
+        assertEquals(0x00, decodeNecByte(pattern, 2));
+        assertEquals(0xFF, decodeNecByte(pattern, 18));
+        assertEquals(0x45, decodeNecByte(pattern, 34));
+        assertEquals(0xBA, decodeNecByte(pattern, 50));
+        assertEquals(560, pattern[66]);
+        assertEquals(40000, pattern[67]);
+    }
+
+    @Test
+    public void necEncoderRejectsOutOfRangeValues() {
+        assertThrows(IllegalArgumentException.class,
+                () -> PowerCodeCatalog.buildNec(-1, 0));
+        assertThrows(IllegalArgumentException.class,
+                () -> PowerCodeCatalog.buildNec(0, 256));
+    }
+
+    private int decodeNecByte(int[] pattern, int offset) {
+        int value = 0;
+        for (int bit = 0; bit < 8; bit++) {
+            assertEquals(560, pattern[offset + bit * 2]);
+            if (pattern[offset + bit * 2 + 1] > 1000) value |= 1 << bit;
+        }
+        return value;
     }
 }

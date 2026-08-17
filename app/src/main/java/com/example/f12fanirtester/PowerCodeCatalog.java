@@ -61,7 +61,13 @@ final class PowerCodeCatalog {
         }
     }
 
-    private static int[] buildNec(int address, int command) {
+    static int[] buildNec(int address, int command) {
+        if (address < 0 || address > 255) {
+            throw new IllegalArgumentException("NEC address must be 0..255");
+        }
+        if (command < 0 || command > 255) {
+            throw new IllegalArgumentException("NEC command must be 0..255");
+        }
         ArrayList<Integer> pattern = new ArrayList<>();
         pattern.add(9000);
         pattern.add(4500);
