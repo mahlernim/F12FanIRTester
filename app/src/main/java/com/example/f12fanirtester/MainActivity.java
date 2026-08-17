@@ -219,13 +219,13 @@ public class MainActivity extends Activity {
 
         updatePowerCandidate();
 
-        TextView necTitle = text("CONFIRMED NEC COMMAND SCAN", 17, true);
+        TextView necTitle = text("NEC COMMAND SCAN — ADDRESS 0x00", 17, true);
         necTitle.setPadding(0, dp(20), 0, dp(4));
         root.addView(necTitle);
 
         TextView necHelp = text(
-                "Confirmed protocol: NEC address 0x00. Power is command 0x45. " +
-                "Scan commands 0–255 to identify the remaining controls.", 13, false);
+                "Use this after NEC 00/45 responds. Scan commands 0–255 to identify controls.",
+                13, false);
         root.addView(necHelp);
 
         necCodeView = text("", 24, true);
@@ -608,7 +608,7 @@ public class MainActivity extends Activity {
 
     private void updateNecCode() {
         if (necCodeView != null) {
-            String known = necCommand == 0x45 ? "   ✓ CONFIRMED POWER" : "";
+            String known = necCommand == 0x45 ? "   • POWER CANDIDATE" : "";
             necCodeView.setText(String.format(Locale.US,
                     "C = %d   •   0x%02X%s\n%s",
                     necCommand, necCommand, known, legacyNecCode(necCommand)));
